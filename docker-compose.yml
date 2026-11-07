@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-budtrack}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-budtrack}
+      POSTGRES_DB: ${POSTGRES_DB:-budtrack}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      # PostgreSQL 18+ keeps PGDATA under /var/lib/postgresql/<major>/docker,
+      # so the volume must be mounted at the parent directory.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-budtrack} -d ${POSTGRES_DB:-budtrack}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-budtrack}:${POSTGRES_PASSWORD:-budtrack}@db:5432/${POSTGRES_DB:-budtrack}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
