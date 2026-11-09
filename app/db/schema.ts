@@ -46,6 +46,24 @@ export const budgetPlans = pgTable(
   ],
 );
 
+export const savingsGoals = pgTable(
+  "savings_goals",
+  {
+    id: serial("id").primaryKey(),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "cascade" }),
+    targetCents: integer("target_cents").notNull(),
+    targetDate: date("target_date").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("savings_goals_category_unique").on(table.categoryId),
+  ],
+);
+
 export const transactions = pgTable(
   "transactions",
   {
@@ -74,4 +92,5 @@ export const transactions = pgTable(
 export type Category = typeof categories.$inferSelect;
 export type BudgetPlan = typeof budgetPlans.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type SavingsGoal = typeof savingsGoals.$inferSelect;
 export type CategoryKind = Category["kind"];

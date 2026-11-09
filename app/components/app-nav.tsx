@@ -5,6 +5,7 @@ import { cn } from "~/lib/utils";
 
 const links = [
   { to: "/planning", label: "Planning" },
+  { to: "/savings", label: "Savings" },
   { to: "/categories", label: "Subcategories" },
   { to: "/tracking", label: "Tracking" },
   { to: "/dashboard", label: "Dashboard" },

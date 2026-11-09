@@ -1,4 +1,4 @@
-import { Form, redirect, useActionData } from "react-router";
+import { Form, Link, redirect, useActionData } from "react-router";
 import { eq, sql } from "drizzle-orm";
 
 import { PageShell } from "~/components/app-nav";
@@ -14,9 +14,11 @@ import {
 import { db } from "~/db";
 import { categories, transactions } from "~/db/schema";
 import { listCategories } from "~/lib/budget.server";
-import { isCategoryKind, KIND_LABELS, KINDS } from "~/lib/kinds";
+import { isCategoryKind, KIND_LABELS } from "~/lib/kinds";
 
 import type { Route } from "./+types/categories";
+
+const MANAGED_KINDS = ["income", "expense"] as const;
 
 export async function loader() {
   const [categoryRows, usageRows] = await Promise.all([
@@ -32,7 +34,7 @@ export async function loader() {
 
   const usage = new Map(usageRows.map((row) => [row.categoryId, row.count]));
 
-  const groups = KINDS.map((kind) => ({
+  const groups = MANAGED_KINDS.map((kind) => ({
     kind,
     label: KIND_LABELS[kind],
     rows: categoryRows
@@ -57,6 +59,9 @@ export async function action({ request }: Route.ActionArgs) {
 
     if (!name) return { error: "Subcategory name is required." };
     if (!isCategoryKind(kind)) return { error: "Choose a category type." };
+    if (kind === "savings") {
+      return { error: "Savings subcategories are created in the Savings Planner." };
+    }
 
     const [max] = await db
       .select({ value: sql<number>`coalesce(max(${categories.sortOrder}), 0)` })
@@ -74,6 +79,17 @@ export async function action({ request }: Route.ActionArgs) {
     if (!Number.isInteger(categoryId)) return { error: "Unknown subcategory." };
     if (!name) return { error: "Subcategory name is required." };
 
+    const [category] = await db
+      .select({ kind: categories.kind })
+      .from(categories)
+      .where(eq(categories.id, categoryId))
+      .limit(1);
+
+    if (!category) return { error: "Unknown subcategory." };
+    if (category.kind === "savings") {
+      return { error: "Savings subcategories are managed in the Savings Planner." };
+    }
+
     await db.update(categories).set({ name }).where(eq(categories.id, categoryId));
     return redirect("/categories");
   }
@@ -81,6 +97,17 @@ export async function action({ request }: Route.ActionArgs) {
   if (intent === "delete-category") {
     const categoryId = Number(form.get("categoryId"));
     if (!Number.isInteger(categoryId)) return { error: "Unknown subcategory." };
+
+    const [category] = await db
+      .select({ kind: categories.kind })
+      .from(categories)
+      .where(eq(categories.id, categoryId))
+      .limit(1);
+
+    if (!category) return { error: "Unknown subcategory." };
+    if (category.kind === "savings") {
+      return { error: "Savings subcategories are managed in the Savings Planner." };
+    }
 
     const [usage] = await db
       .select({ count: sql<number>`count(*)`.mapWith(Number) })
@@ -110,8 +137,12 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Subcategories</h1>
           <p className="text-sm text-muted-foreground">
-            Add, rename and remove the subcategories used by the planning grid. A subcategory keeps
-            its type for its whole lifetime.
+            Add, rename and remove the income and expense subcategories used by the planning grid.
+            A subcategory keeps its type for its whole lifetime. Savings subcategories live in the{" "}
+            <Link to="/savings" className="underline underline-offset-4">
+              Savings Planner
+            </Link>
+            .
           </p>
         </div>
 
@@ -133,7 +164,7 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {KINDS.map((kind) => (
+                  {MANAGED_KINDS.map((kind) => (
                     <SelectItem key={kind} value={kind}>
                       {KIND_LABELS[kind]}
                     </SelectItem>
@@ -218,6 +249,19 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
             </section>
           ))}
         </div>
+
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
+          <div>
+            <h2 className="text-sm font-semibold">Savings</h2>
+            <p className="text-sm text-muted-foreground">
+              Savings subcategories, their target amounts and dates, and progress towards them are
+              managed in the Savings Planner.
+            </p>
+          </div>
+          <Button asChild size="sm">
+            <Link to="/savings">Open savings planner</Link>
+          </Button>
+        </section>
 
         <p className="text-xs text-muted-foreground">
           Deleting a subcategory also removes its planned amounts. Renaming keeps all plans and

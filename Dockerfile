@@ -23,4 +23,4 @@ COPY --from=build /app/scripts ./scripts
 
 EXPOSE 3000
 
-CMD ["sh", "-c", "node scripts/migrate.mjs && node scripts/seed.mjs && npm start"]
+CMD ["sh", "-c", "node scripts/migrate.mjs && npm start"]
