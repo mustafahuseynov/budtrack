@@ -18,7 +18,7 @@ export function isValidIsoDate(value: string): boolean {
 }
 
 /** Turns `YYYY-MM-DD` into a comparable month index. */
-function monthIndex(value: string): number {
+export function monthIndex(value: string): number {
   const [year, month] = value.slice(0, 10).split("-").map(Number);
   return year * 12 + (month - 1);
 }
@@ -63,4 +63,48 @@ export function summarizeGoal({
     monthlyCents,
     status,
   };
+}
+
+/**
+ * Suggested savings amount per month of `year`: the same "monthly needed" figure
+ * as the Savings planner, but recalculated for every month from the current one
+ * through the target month and reduced by the amounts already planned in the
+ * earlier months of that range. Only active goals produce hints, and months
+ * whose suggestion drops to zero are left out.
+ */
+export function monthlyGoalHints({
+  targetCents,
+  allocatedCents,
+  targetDate,
+  today,
+  year,
+  plannedCentsByIndex,
+}: {
+  targetCents: number;
+  allocatedCents: number;
+  targetDate: string;
+  today: string;
+  year: number;
+  plannedCentsByIndex: Map<number, number>;
+}): Map<number, number> {
+  const hints = new Map<number, number>();
+  const { status } = summarizeGoal({ targetCents, allocatedCents, targetDate, today });
+  if (status !== "active") return hints;
+
+  const startIndex = monthIndex(today);
+  const endIndex = monthIndex(targetDate);
+  const yearStart = year * 12;
+
+  let plannedEarlierCents = 0;
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const remainingCents = Math.max(targetCents - allocatedCents - plannedEarlierCents, 0);
+    const monthsLeft = endIndex - index + 1;
+    const hintCents = Math.ceil(remainingCents / monthsLeft);
+    const month = index - yearStart + 1;
+
+    if (hintCents > 0 && month >= 1 && month <= 12) hints.set(month, hintCents);
+    plannedEarlierCents += plannedCentsByIndex.get(index) ?? 0;
+  }
+
+  return hints;
 }

@@ -1,11 +1,18 @@
 import { Form, Link, redirect, useActionData } from "react-router";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { PageShell } from "~/components/app-nav";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Progress } from "~/components/ui/progress";
 import { Input } from "~/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { db } from "~/db";
 import { categories, savingsGoals } from "~/db/schema";
 import { formatCents, centsToInputValue, parseAmountToCents } from "~/lib/money";
@@ -27,6 +34,7 @@ export async function loader() {
       name: row.name,
       targetCents: row.targetCents,
       targetDate: row.targetDate,
+      initialCents: row.initialCents ?? 0,
       allocatedCents: row.allocatedCents,
       contributionCount: row.contributionCount,
       summary:
@@ -44,15 +52,20 @@ export async function loader() {
 
 function readGoalAmounts(
   form: FormData,
-): { targetCents: number; targetDate: string } | { error: string } {
+):
+  | { targetCents: number; targetDate: string; initialCents: number }
+  | { error: string } {
   const targetCents = parseAmountToCents(String(form.get("target") ?? ""));
   const targetDate = String(form.get("targetDate") ?? "").slice(0, 10);
+  const initialCents = parseAmountToCents(String(form.get("initial") ?? ""));
 
   if (targetCents === null) return { error: "Enter a valid target amount." };
   if (targetCents <= 0) return { error: "Target amount must be greater than zero." };
   if (!isValidIsoDate(targetDate)) return { error: "Enter a valid target date." };
+  if (initialCents === null) return { error: "Enter a valid starting amount." };
+  if (initialCents < 0) return { error: "Starting amount cannot be negative." };
 
-  return { targetCents, targetDate };
+  return { targetCents, targetDate, initialCents };
 }
 
 async function readSavingsCategoryId(form: FormData): Promise<number | null> {
@@ -74,27 +87,22 @@ export async function action({ request }: Route.ActionArgs) {
   const today = todayIso();
 
   if (intent === "create-goal") {
-    const name = String(form.get("name") ?? "").trim();
-    if (!name) return { error: "Goal name is required." };
+    const categoryId = await readSavingsCategoryId(form);
+    if (categoryId === null) return { error: "Choose a savings subcategory." };
 
     const amounts = readGoalAmounts(form);
     if ("error" in amounts) return amounts;
     if (amounts.targetDate < today) return { error: "Target date cannot be in the past." };
 
-    await db.transaction(async (tx) => {
-      const [max] = await tx
-        .select({ value: sql<number>`coalesce(max(${categories.sortOrder}), 0)` })
-        .from(categories)
-        .where(eq(categories.kind, "savings"));
+    const [existing] = await db
+      .select({ id: savingsGoals.id })
+      .from(savingsGoals)
+      .where(eq(savingsGoals.categoryId, categoryId))
+      .limit(1);
 
-      const [category] = await tx
-        .insert(categories)
-        .values({ kind: "savings", name, sortOrder: Number(max?.value ?? 0) + 1 })
-        .returning({ id: categories.id });
+    if (existing) return { error: "That savings subcategory already has a goal." };
 
-      await tx.insert(savingsGoals).values({ categoryId: category.id, ...amounts });
-    });
-
+    await db.insert(savingsGoals).values({ categoryId, ...amounts });
     return redirect("/savings");
   }
 
@@ -115,7 +123,11 @@ export async function action({ request }: Route.ActionArgs) {
         .values({ categoryId, ...amounts })
         .onConflictDoUpdate({
           target: savingsGoals.categoryId,
-          set: { targetCents: amounts.targetCents, targetDate: amounts.targetDate },
+          set: {
+            targetCents: amounts.targetCents,
+            targetDate: amounts.targetDate,
+            initialCents: amounts.initialCents,
+          },
         });
     });
 
@@ -135,7 +147,11 @@ export async function action({ request }: Route.ActionArgs) {
       .values({ categoryId, ...amounts })
       .onConflictDoUpdate({
         target: savingsGoals.categoryId,
-        set: { targetCents: amounts.targetCents, targetDate: amounts.targetDate },
+        set: {
+          targetCents: amounts.targetCents,
+          targetDate: amounts.targetDate,
+          initialCents: amounts.initialCents,
+        },
       });
 
     return redirect("/savings");
@@ -215,6 +231,20 @@ function GoalCard({ goal, today }: { goal: GoalRow; today: string }) {
               required
             />
           </div>
+          <div className="space-y-1">
+            <label
+              className="text-xs font-medium text-muted-foreground"
+              htmlFor={`initial-${goal.categoryId}`}
+            >
+              Already saved
+            </label>
+            <Input
+              id={`initial-${goal.categoryId}`}
+              name="initial"
+              inputMode="decimal"
+              placeholder="0.00"
+            />
+          </div>
           <Button type="submit" size="sm" className="w-full">
             Set target
           </Button>
@@ -250,6 +280,11 @@ function GoalCard({ goal, today }: { goal: GoalRow; today: string }) {
           </span>
         </div>
         <Progress value={barValue} aria-label={`${goal.name} progress`} />
+        {goal.initialCents > 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Includes {formatCents(goal.initialCents)} already saved before tracking started.
+          </p>
+        ) : null}
       </div>
 
       <dl className="grid grid-cols-3 gap-2 rounded-md bg-muted/50 px-3 py-2 text-xs">
@@ -292,7 +327,7 @@ function GoalCard({ goal, today }: { goal: GoalRow; today: string }) {
               required
             />
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-3">
             <div className="space-y-1">
               <label
                 className="text-xs font-medium text-muted-foreground"
@@ -321,6 +356,21 @@ function GoalCard({ goal, today }: { goal: GoalRow; today: string }) {
                 type="date"
                 defaultValue={goal.targetDate}
                 required
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                className="text-xs font-medium text-muted-foreground"
+                htmlFor={`edit-initial-${goal.categoryId}`}
+              >
+                Already saved
+              </label>
+              <Input
+                id={`edit-initial-${goal.categoryId}`}
+                name="initial"
+                inputMode="decimal"
+                placeholder="0.00"
+                defaultValue={centsToInputValue(goal.initialCents)}
               />
             </div>
           </div>
@@ -366,6 +416,7 @@ export default function Savings({ loaderData, actionData }: Route.ComponentProps
   const totalSaved = goals.reduce((sum, goal) => sum + (goal.summary?.allocatedCents ?? 0), 0);
   const overallPercent =
     totalTarget > 0 ? Math.round((totalSaved / totalTarget) * 100) : 0;
+  const available = goals.filter((goal) => goal.targetCents === null);
 
   return (
     <PageShell>
@@ -373,12 +424,17 @@ export default function Savings({ loaderData, actionData }: Route.ComponentProps
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Savings planner</h1>
           <p className="text-sm text-muted-foreground">
-            Set a target amount and date for each savings subcategory. Progress comes from the
-            savings transactions you record in{" "}
+            Pick a savings subcategory from{" "}
+            <Link to="/categories" className="underline underline-offset-4">
+              Subcategories
+            </Link>{" "}
+            and give it a target amount and date. Progress combines the amount already saved with
+            the savings transactions you record in{" "}
             <Link to="/tracking" className="underline underline-offset-4">
               Tracking
             </Link>
-            , so no amount is written into the planning grid.
+            ; the planning grid only shows the suggested monthly amount as a reminder and never
+            fills anything in automatically.
           </p>
         </div>
 
@@ -388,68 +444,104 @@ export default function Savings({ loaderData, actionData }: Route.ComponentProps
           </p>
         ) : null}
 
-        <div className="rounded-lg border bg-card p-4">
-          <h2 className="text-sm font-semibold">New savings goal</h2>
-          <Form
-            method="post"
-            className="mt-3 flex flex-wrap items-end gap-2"
-            key={`create-${goals.length}`}
-          >
-            <input type="hidden" name="intent" value="create-goal" />
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground" htmlFor="new-name">
-                Subcategory
-              </label>
-              <Input
-                id="new-name"
-                name="name"
-                placeholder="e.g. Holiday fund"
-                className="w-56"
-                required
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground" htmlFor="new-target">
-                Target amount
-              </label>
-              <Input
-                id="new-target"
-                name="target"
-                inputMode="decimal"
-                placeholder="0.00"
-                className="w-36"
-                required
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground" htmlFor="new-date">
-                Target date
-              </label>
-              <Input
-                id="new-date"
-                name="targetDate"
-                type="date"
-                min={today}
-                className="w-40"
-                required
-              />
-            </div>
-            <Button type="submit" size="sm">
-              Add goal
-            </Button>
-          </Form>
-        </div>
-
-        {goals.length === 0 ? (
-          <div className="rounded-lg border border-dashed bg-card/60 p-6 text-sm text-muted-foreground">
-            No savings subcategories yet. Create one above to start planning; its savings
-            transactions are recorded in{" "}
-            <Link to="/tracking" className="underline underline-offset-4">
-              Tracking
-            </Link>
-            .
+        {available.length > 0 ? (
+          <div className="rounded-lg border bg-card p-4">
+            <h2 className="text-sm font-semibold">New savings goal</h2>
+            <Form
+              method="post"
+              className="mt-3 flex flex-wrap items-end gap-2"
+              key={`create-${available.map((goal) => goal.categoryId).join("-")}`}
+            >
+              <input type="hidden" name="intent" value="create-goal" />
+              <div className="space-y-1">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="new-category"
+                >
+                  Subcategory
+                </label>
+                <Select name="categoryId" defaultValue={String(available[0].categoryId)}>
+                  <SelectTrigger id="new-category" className="h-9 w-56">
+                    <SelectValue placeholder="Choose subcategory" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {available.map((goal) => (
+                      <SelectItem key={goal.categoryId} value={String(goal.categoryId)}>
+                        {goal.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="new-target">
+                  Target amount
+                </label>
+                <Input
+                  id="new-target"
+                  name="target"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  className="w-36"
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground" htmlFor="new-date">
+                  Target date
+                </label>
+                <Input
+                  id="new-date"
+                  name="targetDate"
+                  type="date"
+                  min={today}
+                  className="w-40"
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label
+                  className="text-xs font-medium text-muted-foreground"
+                  htmlFor="new-initial"
+                >
+                  Already saved
+                </label>
+                <Input
+                  id="new-initial"
+                  name="initial"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  className="w-36"
+                />
+              </div>
+              <Button type="submit" size="sm">
+                Add goal
+              </Button>
+            </Form>
           </div>
         ) : (
+          <div className="rounded-lg border border-dashed bg-card/60 p-4 text-sm text-muted-foreground">
+            {goals.length === 0 ? (
+              <>
+                No savings subcategories yet.{" "}
+                <Link to="/categories" className="underline underline-offset-4">
+                  Create one in Subcategories
+                </Link>{" "}
+                first, then set its target here.
+              </>
+            ) : (
+              <>
+                Every savings subcategory already has a goal.{" "}
+                <Link to="/categories" className="underline underline-offset-4">
+                  Add another subcategory
+                </Link>{" "}
+                to plan a new goal.
+              </>
+            )}
+          </div>
+        )}
+
+        {goals.length > 0 ? (
           <>
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-lg border bg-card p-4">
@@ -477,7 +569,7 @@ export default function Savings({ loaderData, actionData }: Route.ComponentProps
               ))}
             </div>
           </>
-        )}
+        ) : null}
 
         <p className="text-xs text-muted-foreground">
           The monthly amount is a suggestion only: it spreads what is still missing across the

@@ -25,7 +25,8 @@ import {
   parseAmountToCents,
   sanitizeAmountInput,
 } from "~/lib/money";
-import { MONTH_LABELS, parseYear } from "~/lib/period";
+import { MONTH_LABELS, parseYear, todayIso } from "~/lib/period";
+import { getSavingsHints } from "~/lib/savings.server";
 import { cn } from "~/lib/utils";
 
 import type { Route } from "./+types/planning";
@@ -40,16 +41,23 @@ function draftToCents(raw: string): number | null {
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const year = parseYear(url.searchParams.get("year"));
-  const [categoryRows, planMap] = await Promise.all([listCategories(), getYearPlans(year)]);
+  const today = todayIso();
+  const [categoryRows, planMap, hints] = await Promise.all([
+    listCategories(),
+    getYearPlans(year),
+    getSavingsHints(year, today),
+  ]);
 
   return {
     year,
+    today,
     categories: categoryRows.map((category) => ({
       id: category.id,
       name: category.name,
       kind: category.kind,
     })),
     plans: Object.fromEntries(planMap) as Record<string, number>,
+    hints,
   };
 }
 
@@ -154,7 +162,7 @@ export async function action({ request }: Route.ActionArgs): Promise<PlanningAct
 }
 
 export default function Planning({ loaderData }: Route.ComponentProps) {
-  const { year, categories: categoryRows, plans } = loaderData;
+  const { year, categories: categoryRows, plans, hints } = loaderData;
   const [editing, setEditing] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState<{ error: string; cell?: string } | null>(null);
@@ -458,6 +466,7 @@ export default function Planning({ loaderData }: Route.ComponentProps) {
                               <PlanCell
                                 editing={editing}
                                 cents={effectivePlans[key] ?? 0}
+                                hintCents={hints[key] ?? null}
                                 value={drafts[key] ?? centsToInputValue(plans[key] ?? 0)}
                                 label={`${row.name} ${MONTH_LABELS[month - 1]}`}
                                 error={

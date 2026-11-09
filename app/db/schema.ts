@@ -55,6 +55,7 @@ export const savingsGoals = pgTable(
       .references(() => categories.id, { onDelete: "cascade" }),
     targetCents: integer("target_cents").notNull(),
     targetDate: date("target_date").notNull(),
+    initialCents: integer("initial_cents").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

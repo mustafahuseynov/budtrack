@@ -14,11 +14,9 @@ import {
 import { db } from "~/db";
 import { categories, transactions } from "~/db/schema";
 import { listCategories } from "~/lib/budget.server";
-import { isCategoryKind, KIND_LABELS } from "~/lib/kinds";
+import { isCategoryKind, KIND_LABELS, KINDS } from "~/lib/kinds";
 
 import type { Route } from "./+types/categories";
-
-const MANAGED_KINDS = ["income", "expense"] as const;
 
 export async function loader() {
   const [categoryRows, usageRows] = await Promise.all([
@@ -34,7 +32,7 @@ export async function loader() {
 
   const usage = new Map(usageRows.map((row) => [row.categoryId, row.count]));
 
-  const groups = MANAGED_KINDS.map((kind) => ({
+  const groups = KINDS.map((kind) => ({
     kind,
     label: KIND_LABELS[kind],
     rows: categoryRows
@@ -59,9 +57,6 @@ export async function action({ request }: Route.ActionArgs) {
 
     if (!name) return { error: "Subcategory name is required." };
     if (!isCategoryKind(kind)) return { error: "Choose a category type." };
-    if (kind === "savings") {
-      return { error: "Savings subcategories are created in the Savings Planner." };
-    }
 
     const [max] = await db
       .select({ value: sql<number>`coalesce(max(${categories.sortOrder}), 0)` })
@@ -80,15 +75,12 @@ export async function action({ request }: Route.ActionArgs) {
     if (!name) return { error: "Subcategory name is required." };
 
     const [category] = await db
-      .select({ kind: categories.kind })
+      .select({ id: categories.id })
       .from(categories)
       .where(eq(categories.id, categoryId))
       .limit(1);
 
     if (!category) return { error: "Unknown subcategory." };
-    if (category.kind === "savings") {
-      return { error: "Savings subcategories are managed in the Savings Planner." };
-    }
 
     await db.update(categories).set({ name }).where(eq(categories.id, categoryId));
     return redirect("/categories");
@@ -99,15 +91,12 @@ export async function action({ request }: Route.ActionArgs) {
     if (!Number.isInteger(categoryId)) return { error: "Unknown subcategory." };
 
     const [category] = await db
-      .select({ kind: categories.kind })
+      .select({ id: categories.id })
       .from(categories)
       .where(eq(categories.id, categoryId))
       .limit(1);
 
     if (!category) return { error: "Unknown subcategory." };
-    if (category.kind === "savings") {
-      return { error: "Savings subcategories are managed in the Savings Planner." };
-    }
 
     const [usage] = await db
       .select({ count: sql<number>`count(*)`.mapWith(Number) })
@@ -137,8 +126,9 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Subcategories</h1>
           <p className="text-sm text-muted-foreground">
-            Add, rename and remove the income and expense subcategories used by the planning grid.
-            A subcategory keeps its type for its whole lifetime. Savings subcategories live in the{" "}
+            Add, rename and remove the subcategories used by the planning grid. A subcategory
+            keeps its type for its whole lifetime. Savings subcategories are managed here too; set
+            their target amount, date and starting balance in the{" "}
             <Link to="/savings" className="underline underline-offset-4">
               Savings Planner
             </Link>
@@ -164,7 +154,7 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {MANAGED_KINDS.map((kind) => (
+                  {KINDS.map((kind) => (
                     <SelectItem key={kind} value={kind}>
                       {KIND_LABELS[kind]}
                     </SelectItem>
@@ -234,7 +224,11 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
                           variant="ghost"
                           className="text-muted-foreground hover:text-destructive"
                           onClick={(event) => {
-                            if (!window.confirm(`Delete "${row.name}"?`)) {
+                            const message =
+                              group.kind === "savings"
+                                ? `Delete "${row.name}"? Its target and starting amount are removed too.`
+                                : `Delete "${row.name}"?`;
+                            if (!window.confirm(message)) {
                               event.preventDefault();
                             }
                           }}
@@ -254,8 +248,8 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
           <div>
             <h2 className="text-sm font-semibold">Savings</h2>
             <p className="text-sm text-muted-foreground">
-              Savings subcategories, their target amounts and dates, and progress towards them are
-              managed in the Savings Planner.
+              Savings subcategories are managed here like any other. Open the Savings Planner to
+              set a target amount, target date and the amount already saved for each of them.
             </p>
           </div>
           <Button asChild size="sm">
@@ -264,8 +258,8 @@ export default function Categories({ loaderData, actionData }: Route.ComponentPr
         </section>
 
         <p className="text-xs text-muted-foreground">
-          Deleting a subcategory also removes its planned amounts. Renaming keeps all plans and
-          transactions intact.
+          Deleting a subcategory also removes its planned amounts and, for savings subcategories,
+          its goal. Renaming keeps all plans and transactions intact.
         </p>
       </div>
     </PageShell>
